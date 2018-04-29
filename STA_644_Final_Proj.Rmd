@@ -136,7 +136,8 @@ df_Housing = df_Housing %>% select(CSA2010,vacant15,hcvhouseXX)
 
 sp_data = plyr::join_all(list(df_Census,df_Crime,df_Workforce,df_Health,df_Housing),
                    by='CSA2010',type='left')[-c(1,57),] %>%
-  mutate(CSA2010 = as.character(CSA2010))
+  mutate(CSA2010 = as.character(CSA2010)) %>%
+  mutate_if(is.factor, function(x){as.character(x) %>% str_remove_all(.,",") %>% as.numeric()})
 ```
 
 Source for shape files: http://gis-baltimore.opendata.arcgis.com/datasets?q=boundary 
@@ -182,7 +183,7 @@ plots = sapply(c(1:n), function(x){
 })
 ```
 
-```{r,fig.width=15}
+```{r,fig.width=10}
 ggplot()+
   geom_sf(data=bal_city, fill='lightblue')+
   geom_sf(data=neighb)+
@@ -193,4 +194,51 @@ ggplot()+
 ```
 
 
+### Developing Spatial Model
 
+```{r}
+#EDA
+lm_data = sp_data %>% mutate(lg_viol15 = log(viol15), lg_hhpov15 = log(hhpov15),
+                          lg_comprop15 = log(comprop15), lg_numbus15 = log(numbus15),
+                          lg_tanf15 = log(tanf15), lg_vacant15 = log(vacant15)) %>%
+  select(-c(viol15,hhpov15,comprop15,numbus15,tanf15,vacant15))
+GGally::ggpairs(lm_data[,c(11,2:6)])
+GGally::ggpairs(lm_data[,c(11,7:10)])
+GGally::ggpairs(lm_data[,c(11:16)])
+```
+
+```{r}
+#variable selection using BMA
+library(BAS)
+df.bas = bas.lm(lg_viol15 ~ ., data=lm_data[,-1],
+       prior="g-prior", a=nrow(lm_data), modelprior=uniform())
+       #method="MCMC", MCMC.iterations = 200000, thin = 20)
+sp_resp = sp_sf %>% select(CSA2010,viol15)
+
+#diagnostics(df.bas, type="pip")
+par(mfrow=c(2,2))
+plot(df.bas)
+#plot(coef(df.bas),ask = FALSE)
+par(mfrow=c(1,1))
+bas_pred = lm_data[,c("CSA2010",names(lm_data %>% select(-lg_viol15))[df.bas$probne0[-1]>=0.5])]
+bas_data = left_join(sp_resp,bas_pred,by="CSA2010")
+
+#variable selection using stepwise selection
+reg1 = lm(lg_viol15~.,data = lm_data)
+
+aic_step = step(reg1,trace = F, direction = "backward") 
+aic_pred = lm_data[,c("CSA2010",names(aic_step$coefficients)[-1])]
+aic_data = left_join(sp_resp,aic_pred,by="CSA2010")
+
+bic_step = step(reg1,k = log(nrow(lm_data)),trace = F,direction = "backward")
+bic_pred = lm_data[,c("CSA2010",names(bic_step$coefficients)[-1])]
+bic_data = left_join(sp_resp,bic_pred,by="CSA2010")
+```
+
+```{r}
+ggplot()+
+  geom_sf(data=bal_city, fill='grey')+
+  geom_sf(data=bas_data, aes(fill=viol15))+
+  #scale_fill_gradient(low="blue", high="red")+
+  theme_bw()
+```
