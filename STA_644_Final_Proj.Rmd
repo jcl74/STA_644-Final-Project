@@ -124,16 +124,33 @@ legend('topleft',legend=c('Series','Fit'),lty=c(1,1),col=c('black','red'))
 Source: https://bniajfi.org/ 
 
 ```{r}
-df_cen <- read.csv('Demo_Data/Census Demographics-Table 1.csv')
-df_c <- read.csv('Demo_Data/Crime-Table 1.csv')
+files <- list.files("./Demo_Data", pattern="*.csv", full.names=TRUE)
+for(i in 1:length(files)){
+  assign(paste("df",str_extract(files[i],"(?<=Data/)[a-zA-Z]+"),sep="_"),read.csv(files[i]))
+}
+df_Census = df_Census %>% select(CSA2010,age18_15,age24_15,hhpov15)
+df_Crime = df_Crime %>% select(CSA2010,viol15)
+df_Workforce = df_Workforce %>% select(CSA2010,nilf15,unempr15,lesshs15,comprop15,numbus15)
+df_Health = df_Health %>% select(CSA2010,teenbir15,tanf15,lifexp15,mort1_15)
+df_Housing = df_Housing %>% select(CSA2010,vacant15,hcvhouseXX)
+
+sp_data = plyr::join_all(list(df_Census,df_Crime,df_Workforce,df_Health,df_Housing),
+                   by='CSA2010',type='left')[-c(1,57),] %>%
+  mutate(CSA2010 = as.character(CSA2010))
 ```
 
 Source for shape files: http://gis-baltimore.opendata.arcgis.com/datasets?q=boundary 
 
 ```{r}
+#shape files
 bal_city = st_read('shape_files/baltimore_city_polygon.shp', quiet=TRUE, stringsAsFactors=TRUE) %>%
   st_transform(4326)
-neighb = st_read('shape_files/Vital_Signs_15_Census_Demographics.shp', quiet=TRUE, stringsAsFactors=TRUE)
+neighb = st_read('shape_files/Vital_Signs_15_Census_Demographics.shp', quiet=TRUE, stringsAsFactors=TRUE) %>%
+  select(CSA2010,geometry) %>%
+  mutate(CSA2010 = as.character(CSA2010))
+
+#areal dataset
+sp_sf = left_join(neighb,sp_data,by="CSA2010")
 ```
 
 
