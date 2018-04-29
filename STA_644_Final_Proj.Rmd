@@ -1,0 +1,179 @@
+---
+title: "STA_644: Final Project"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(sf)
+library(spdep)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(RSocrata)
+library(stringr)
+library(RColorBrewer)
+```
+
+## Data for Time Series
+
+Source for daily crime data: https://data.baltimorecity.gov/Public-Safety/BPD-Part-1-Victim-Based-Crime-Data/wsfq-mvij
+
+```{r, message=FALSE, warning=FALSE}
+#API request
+df <- read.socrata(
+  "https://data.baltimorecity.gov/resource/4ih5-d5d5.json",
+  app_token = "TsdQoSnUFrpReua80oUgsxes8"
+)
+```
+
+```{r}
+#cleaning the data
+violent = unique(df$description)[7:14]
+
+ts_data = df %>% select(crimedate, description) %>%
+  filter(description %in% violent, !str_detect(.$crimedate,"2018")) %>%
+  mutate(crimedate = format(as.POSIXct(crimedate), "%Y-%m"),
+         description = replace(description, str_detect(description,"ROBBERY"),"ROBBERY")) %>%
+  group_by(crimedate, description) %>%
+  summarize(n = n()) %>%
+  spread(.,description,n) %>% ungroup() %>%
+  mutate(TOTAL = rowSums(.[,-1]))
+```
+
+### Visualizing Violent Crime over Time
+
+```{r, fig.height=5,fig.width=10}
+#plotting data
+stack_df = ts_data %>% melt(., id.vars=c('crimedate','TOTAL'), variable.name = 'type') %>%
+  arrange(crimedate) %>%
+  mutate(type = factor(type, levels = c("RAPE","HOMICIDE","SHOOTING","ROBBERY","AGG. ASSAULT")))
+
+ggplot(stack_df, aes(x=crimedate,y=value,group=type))+
+  geom_area(aes(fill=type), alpha=0.6)+
+  geom_line(aes(group = type), position = "stack")+
+  theme_bw()+
+  theme(axis.text.x  = element_text(angle=90,hjust = 0, size=8))+
+  labs(x = 'Crime Date', y='', title = 'Violent Crime in Baltimore City')
+```
+
+### Developing Univariate Time Series Model
+
+```{r}
+date = ts_data$crimedate
+start = c(as.numeric(substr(date[1],1,4)),as.numeric(substr(date[1],6,7)))
+end = c(as.numeric(substr(date[length(date)],1,4)),as.numeric(substr(date[length(date)],6,7)))
+
+crime_ts = ts(ts_data$TOTAL, start=start, end=end, frequency=12)
+
+forecast::ggtsdisplay(crime_ts, points = FALSE)
+```
+
+```{r}
+forecast::ggtsdisplay(diff(crime_ts), points = FALSE)
+```
+
+```{r}
+(m1.1 = forecast::Arima(crime_ts, order = c(0,1,0), 
+            seasonal = list(order=c(0,0,0), period=12)))
+
+(m1.2 = forecast::Arima(crime_ts, order = c(0,1,0), 
+            seasonal = list(order=c(0,1,0), period=12)))
+
+forecast::ggtsdisplay(m1.2$residuals, points=FALSE, lag.max=36)
+```
+
+```{r}
+(m2.1 = forecast::Arima(crime_ts, order = c(0,1,0), 
+            seasonal = list(order=c(1,1,0), period=12)))
+
+(m2.2 = forecast::Arima(crime_ts, order = c(0,1,0), 
+            seasonal = list(order=c(0,1,1), period=12)))
+
+(m2.3 = forecast::Arima(crime_ts, order = c(0,1,0), 
+            seasonal = list(order=c(1,1,1), period=12)))
+
+forecast::ggtsdisplay(m2.2$residuals, points=FALSE, lag.max=36)
+```
+
+```{r}
+(m3.1 = forecast::Arima(crime_ts, order = c(1,1,0), 
+            seasonal = list(order=c(0,1,1), period=12)))
+
+(m3.2 = forecast::Arima(crime_ts, order = c(0,1,1), 
+            seasonal = list(order=c(0,1,1), period=12)))
+
+(m3.3 = forecast::Arima(crime_ts, order = c(1,1,1), 
+            seasonal = list(order=c(0,1,1), period=12)))
+
+forecast::ggtsdisplay(m3.2$residuals, points=FALSE, lag.max=36)
+```
+
+### Model fit and forecasts
+
+```{r}
+library(scales)
+plot(crime_ts, ylab='', main="Model - Arima (0,1,1) x (0,1,1)[12]")
+lines(fitted(m3.2), col=alpha('red',0.8))
+legend('topleft',legend=c('Series','Fit'),lty=c(1,1),col=c('black','red'))
+```
+
+## Data for Spatial Model
+
+Source: https://bniajfi.org/ 
+
+```{r}
+df_cen <- read.csv('Demo_Data/Census Demographics-Table 1.csv')
+df_c <- read.csv('Demo_Data/Crime-Table 1.csv')
+```
+
+Source for shape files: http://gis-baltimore.opendata.arcgis.com/datasets?q=boundary 
+
+```{r}
+bal_city = st_read('shape_files/baltimore_city_polygon.shp', quiet=TRUE, stringsAsFactors=TRUE) %>%
+  st_transform(4326)
+neighb = st_read('shape_files/Vital_Signs_15_Census_Demographics.shp', quiet=TRUE, stringsAsFactors=TRUE)
+```
+
+
+### Visualizing Violent Crime in 2015
+
+```{r}
+crime_df <- df %>% select(crimedate,description,longitude,latitude) %>%
+  filter(description %in% violent, str_detect(.$crimedate,"2015")) %>%
+  mutate(description = case_when(
+    str_detect(description,"ROBBERY") ~ "ROBBERY",
+    str_detect(description,"HOMICIDE|SHOOTING") ~ "HOMICIDE/SHOOTING",
+    TRUE ~ description),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude)) %>%
+  filter(!is.na(latitude)&!is.na(longitude)) #%>%
+  #st_as_sf(.,coords=c('longitude','latitude'), crs=4326)
+```
+
+```{r}
+#old code using base plot
+n = length(unique(crime_df$description))
+cols = brewer.pal(n = 4, name = "Set1")
+plots = sapply(c(1:n), function(x){
+  plot(st_geometry(bal_city), col='lightblue', main=unique(crime_df$description)[x])
+  plot(st_geometry(neighb),col='white',add=TRUE)
+  data = crime_df %>%
+    filter(description == unique(description)[x])
+  contour(MASS::kde2d(x=data$longitude,y=data$latitude),col=cols[x],lwd=2,add=TRUE)
+})
+```
+
+```{r,fig.width=15}
+ggplot()+
+  geom_sf(data=bal_city, fill='lightblue')+
+  geom_sf(data=neighb)+
+  geom_density2d(data=crime_df, aes(x=longitude,y=latitude,color=description))+
+  facet_wrap( ~ description, ncol=2)+
+  theme_bw()+
+  theme(legend.position="none")
+```
+
+
+
