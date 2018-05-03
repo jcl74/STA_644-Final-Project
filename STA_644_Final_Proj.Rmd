@@ -30,7 +30,7 @@ library(rjags)
 
 ## Abstract
 
-Colloquially refered to as a city of neighborhoods, Baltimore City is perhaps infamous for its relatively high levels of violent crime. Using data from the Open Baltimore project and the Baltimore Neighborhood Indicators Alliance, this project aims to visualize the makeup of violent crime in Baltimore City from 2002 - 2017 and to explore if there is any spatial dependence in the level of violent crime in each neighborhood upon controlling for relevant covariates. We model the trends in aggregate violent crime over time using a SARIMA model and investigate the spaital dependence of violent crime using CAR and SAR models.
+Colloquially refered to as a city of neighborhoods, Baltimore City is perhaps infamous for its relatively high levels of violent crime. Using data from the Open Baltimore project and the Baltimore Neighborhood Indicators Alliance, this project aims to visualize the makeup of violent crime in Baltimore City from 2012 - 2017 and to explore if there is any spatial dependence in the level of violent crime in each neighborhood upon controlling for relevant covariates. We model the trends in aggregate violent crime over time using a SARIMA model and investigate the spaital dependence of violent crime using CAR and SAR models.
 
 ## Violent Crime in Baltimore over Time
 
