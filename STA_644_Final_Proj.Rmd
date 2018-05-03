@@ -1,10 +1,15 @@
 ---
-title: "STA_644: Final Project"
-output: pdf_document
+title: "Violent Crime in Baltimore City"
+author: "J.C. Lazzaro"
+date: "Due 05/03/2018 by 11:59 pm"
+output:
+  pdf_document: default
+  html_document:
+    theme: cosmo
 ---
 
 ```{r setup, include=FALSE, message=FALSE, warning=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
 library(ggplot2)
 library(sf)
 library(spdep)
@@ -20,29 +25,20 @@ library(gridExtra)
 library(rjags)
 ```
 
-```{r helper-funcs, echo=FALSE, message=FALSE}
-normalize_weights = function(w) {
-  diag(w) = 0
-  rs = rowSums(w)
-  rs[rs == 0] = 1
-  w/rs
-}
 
-morans_I = function(y, w) {
-  w = normalize_weights(w)
-  n = length(y)
-  y_bar = mean(y)
-  num = sum(w * (y-y_bar) %*% t(y-y_bar))  
-  denom = sum( (y-y_bar)^2 )
-  (n/sum(w)) * (num/denom)
-}
-```
+** Disclaimer **: The BPD Part 1 Victim Based Crime dataset was updated the morning of May 3, 2018 and consequently the number of observations available via the API request at the time of this project's submission has been truncated. Only observations after 12/15/2016 are now available whereas data from 01/01/2012 was available prior to the most recent update. We still include the written analysis of all parts dependent on this data, although all code chunks with supporting material and figures have been suppressed. The API appears to be refreshed automatically, so we encourage the reader to run all of the supressed chunks again to see if the dataset has been updated to include all data from 01/01/2012 to 12/31/2017 which was used for the time series analysis.
 
-## Data for Time Series
+## Abstract
 
-Source for daily crime data: https://data.baltimorecity.gov/Public-Safety/BPD-Part-1-Victim-Based-Crime-Data/wsfq-mvij
+Colloquially refered to as a city of neighborhoods, Baltimore City is perhaps infamous for its relatively high levels of violent crime. Using data from the Open Baltimore project and the Baltimore Neighborhood Indicators Alliance, this project aims to visualize the makeup of violent crime in Baltimore City from 2002 - 2017 and to explore if there is any spatial dependence in the level of violent crime in each neighborhood upon controlling for relevant covariates. We model the trends in aggregate violent crime over time using a SARIMA model and investigate the spaital dependence of violent crime using CAR and SAR models.
 
-```{r, message=FALSE, warning=FALSE}
+## Violent Crime in Baltimore over Time
+
+As part of the Open Baltimore Project, the Baltimore City Police Department (BPD) [Part 1 Victim Based Crime Data](https://data.baltimorecity.gov/Public-Safety/BPD-Part-1-Victim-Based-Crime-Data/wsfq-mvij) provides daily crime data accessible via an API request. The data includes various variables, the most important of which for our purposes is crime date, description, and location.
+
+As per the [2015 Maryland Uniform Crime Report](http://mdsp.maryland.gov/Document%20Downloads/Crime%20in%20Maryland%202015%20Uniform%20Crime%20Report.pdf), we define violent crime as incidents involving: homicide, shooting, rape, robbery, and aggravated assault. We filter the BDP data to only include such incidents and aggregate the data so that the frequency is monthly. The makeup of violent crime in Baltimore City over time is displayed below:
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
 #API request
 df <- read.socrata(
   "https://data.baltimorecity.gov/resource/4ih5-d5d5.json",
@@ -50,7 +46,7 @@ df <- read.socrata(
 )
 ```
 
-```{r}
+```{r, eval=FALSE}
 #cleaning the data
 violent = unique(df$description)[7:14]
 
@@ -64,9 +60,8 @@ ts_data = df %>% select(crimedate, description) %>%
   mutate(TOTAL = rowSums(.[,-1]))
 ```
 
-### Visualizing Violent Crime over Time
 
-```{r, fig.height=5,fig.width=10}
+```{r, fig.height=5,fig.width=10, eval=FALSE}
 #plotting data
 stack_df = ts_data %>% melt(., id.vars=c('crimedate','TOTAL'), variable.name = 'type') %>%
   arrange(crimedate) %>%
@@ -80,9 +75,13 @@ ggplot(stack_df, aes(x=crimedate,y=value,group=type))+
   labs(x = 'Crime Date', y='', title = 'Violent Crime in Baltimore City')
 ```
 
+While the aggregate level of violent crime appears to increase over time, with an evident seasonal pattern, the relative incidence of each of the consituent crimes is roughly constant. That is, any increase in overall levels of violent crime appears to be spread commensurately throughout each type of crime and is not due to any singular increase in a particular violent crime. However, there does appear to be a seasonal uptick in the levels of homicide/shootings from the months of April to September. Nonetheless, the overwhelming majority of violent crime in Baltimore City consists of robbery and aggravated assault.
+
 ### Developing Univariate Time Series Model
 
-```{r}
+There is an apparent trend in the monthly level of aggregate violent crime in Baltimore City over time, implying that the series is not stationary. While one can argue that there is a linear trend in the level of violent crime, the time series can be naively partitioned into two sections - before and after April 2015 - where the mean in the latter partition is markedly higher than that in the former.
+
+```{r, eval=FALSE}
 date = ts_data$crimedate
 start = c(as.numeric(substr(date[1],1,4)),as.numeric(substr(date[1],6,7)))
 end = c(as.numeric(substr(date[length(date)],1,4)),as.numeric(substr(date[length(date)],6,7)))
@@ -92,11 +91,15 @@ crime_ts = ts(ts_data$TOTAL, start=start, end=end, frequency=12)
 forecast::ggtsdisplay(crime_ts, points = FALSE)
 ```
 
-```{r}
+To remedy this apparent non-stationarity, we first difference the data; the resulting series does appear to have a constant mean over time. However, there is a persistent seasonal trend which suggests we should seasonally difference the data with a period of 12 months.
+
+```{r, eval=FALSE}
 forecast::ggtsdisplay(diff(crime_ts), points = FALSE)
 ```
 
-```{r}
+Using model selection criteria, we confirm that seasonally differencing in addition to first differencing is indeed warranted. The ACF and PACF of the residuals of the resulting $ARIMA(0,1,0)(0,1,0)_{12}$ model indicates that there is a remaining seasonal structure to the data not accounted for by the model.
+
+```{r, eval=FALSE}
 (m1.1 = forecast::Arima(crime_ts, order = c(0,1,0), 
             seasonal = list(order=c(0,0,0), period=12)))
 
@@ -106,7 +109,9 @@ forecast::ggtsdisplay(diff(crime_ts), points = FALSE)
 forecast::ggtsdisplay(m1.2$residuals, points=FALSE, lag.max=36)
 ```
 
-```{r}
+The ACF and PACF of the residuals suggests that incorporating a seasonal MA(1) term in the model is needed. Again, we explore the parameter space around the MA(1) term, using model selection criteria to determine the appropriate addition to the model. The residuals of the resulting $ARIMA(0,1,0)(0,1,1)_{12}$ model indicate that there is still structure unaccounted for by the model.
+
+```{r, eval=FALSE}
 (m2.1 = forecast::Arima(crime_ts, order = c(0,1,0), 
             seasonal = list(order=c(1,1,0), period=12)))
 
@@ -114,12 +119,17 @@ forecast::ggtsdisplay(m1.2$residuals, points=FALSE, lag.max=36)
             seasonal = list(order=c(0,1,1), period=12)))
 
 (m2.3 = forecast::Arima(crime_ts, order = c(0,1,0), 
+            seasonal = list(order=c(0,1,2), period=12)))
+
+(m2.4 = forecast::Arima(crime_ts, order = c(0,1,0), 
             seasonal = list(order=c(1,1,1), period=12)))
 
 forecast::ggtsdisplay(m2.2$residuals, points=FALSE, lag.max=36)
 ```
 
-```{r}
+The ACF and PACF of the residuals suggests that adding an MA(1) component to the model is appropriate. Employing the same procedure as above, the residuals of the resulting $ARIMA(0,1,1)(0,1,1)_{12}$ model indicate that there is no significant remaining temporal structure that has not been captured by the model.
+
+```{r, eval=FALSE}
 (m3.1 = forecast::Arima(crime_ts, order = c(1,1,0), 
             seasonal = list(order=c(0,1,1), period=12)))
 
@@ -127,6 +137,9 @@ forecast::ggtsdisplay(m2.2$residuals, points=FALSE, lag.max=36)
             seasonal = list(order=c(0,1,1), period=12)))
 
 (m3.3 = forecast::Arima(crime_ts, order = c(1,1,1), 
+            seasonal = list(order=c(0,1,2), period=12)))
+
+(m3.4 = forecast::Arima(crime_ts, order = c(1,1,1), 
             seasonal = list(order=c(0,1,1), period=12)))
 
 forecast::ggtsdisplay(m3.2$residuals, points=FALSE, lag.max=36)
@@ -134,18 +147,35 @@ forecast::ggtsdisplay(m3.2$residuals, points=FALSE, lag.max=36)
 
 ### Model fit and forecasts
 
-```{r}
+The model fit, overlayed with the time series of aggregate violent crime in Baltimore City, is given below:
+
+```{r, eval=FALSE}
 library(scales)
 plot(crime_ts, ylab='', main="Model - Arima (0,1,1) x (0,1,1)[12]")
 lines(fitted(m3.2), col=alpha('red',0.8))
 legend('topleft',legend=c('Series','Fit'),lty=c(1,1),col=c('black','red'))
 ```
 
-## Data for Spatial Model
+Twelve month forecasts using the $ARIMA(0,1,1)(0,1,1)_{12}$ model indicate that the violent crime will continue to follow the seasonal trend of decreasing in the early months of the year but picking up from late spring until early fall until diminishing in the later months of the year.
 
-Source: https://bniajfi.org/ 
+```{r, eval=FALSE}
+forecast::forecast(m3.2,12) %>% plot()
+```
+
+However, observing the 24 month forecast displays that these forecasts revert to a mean structure and appear to do so rather quickly, perhaps within the 12 month forecast. As expected, the prediction intervals widen with larger forecast horizons.
+
+```{r, eval=FALSE}
+forecast::forecast(m3.2,24) %>% plot()
+```
+
+## Violent Crime in Baltimore in 2015
+
+From the above analysis, we see that there was a marked increase in the aggregate level in violent crime in Baltimore City in 2015. The [Baltimore Neighborhood Indicators Alliance](https://bniajfi.org/) (BNIA) as part of its Vital Signs series, provides data on a variety of aspects for various Baltimore City localities. More specifically, they aggregate data pertaining to education, employment, crime, health, etc. for the Community and Statistical Areas (CSA) in Baltimore City, as defined by the 2010 Census.
+
+Using this data, we use areal data models to both predict the levels of violent crime in each CSA in 2015 and to investigate whether there is significant spatial dependence in the level of violent crime after controlling for relevant covariates. We choose a larger set of covariates a priori from the BNIA Vital Signs series which may be relevant predictors for violent crime in each CSA; a sample of these predictors include: unemployment rate, number of commercial properties, percent of the population aged 18-24, life expectancy, number of vacant properties, percent of the workforce with less than a high school education, etc. As an aside, the [shape files](http://gis-baltimore.opendata.arcgis.com/datasets?q=boundary) used to visualize the model predictions are taken from the Open Baltimore project.
 
 ```{r}
+#get and clean data
 files <- list.files("./Demo_Data", pattern="*.csv", full.names=TRUE)
 for(i in 1:length(files)){
   assign(paste("df",str_extract(files[i],"(?<=Data/)[a-zA-Z]+"),sep="_"),read.csv(files[i]))
@@ -162,7 +192,6 @@ sp_data = plyr::join_all(list(df_Census,df_Crime,df_Workforce,df_Health,df_Housi
   mutate_if(is.factor, function(x){as.character(x) %>% str_remove_all(.,",") %>% as.numeric()})
 ```
 
-Source for shape files: http://gis-baltimore.opendata.arcgis.com/datasets?q=boundary 
 
 ```{r}
 #shape files
@@ -179,7 +208,9 @@ sp_sf = left_join(neighb,sp_data,by="CSA2010")
 
 ### Visualizing Violent Crime in 2015
 
-```{r}
+Prior to enumerating the CAR/SAR models, we first visualize the incidence of violent crime in Baltimore City in 2015 by type of incident. To do so, we refer to the BPD Part 1 Victim Based Crime data to enumerate all incidents of violent crime in 2015 and create kernel density estimates by crime type using the spatial locations of each incident provided as part of the BPD data.
+
+```{r, eval=FALSE}
 crime_df <- df %>% select(crimedate,description,longitude,latitude) %>%
   filter(description %in% violent, str_detect(.$crimedate,"2015")) %>%
   mutate(description = case_when(
@@ -188,24 +219,11 @@ crime_df <- df %>% select(crimedate,description,longitude,latitude) %>%
     TRUE ~ description),
     latitude = as.numeric(latitude),
     longitude = as.numeric(longitude)) %>%
-  filter(!is.na(latitude)&!is.na(longitude)) #%>%
-  #st_as_sf(.,coords=c('longitude','latitude'), crs=4326)
+  filter(!is.na(latitude)&!is.na(longitude))
 ```
 
-```{r}
-#old code using base plot
-n = length(unique(crime_df$description))
-cols = brewer.pal(n = 4, name = "Set1")
-plots = sapply(c(1:n), function(x){
-  plot(st_geometry(bal_city), col='lightblue', main=unique(crime_df$description)[x])
-  plot(st_geometry(neighb),col='white',add=TRUE)
-  data = crime_df %>%
-    filter(description == unique(description)[x])
-  contour(MASS::kde2d(x=data$longitude,y=data$latitude),col=cols[x],lwd=2,add=TRUE)
-})
-```
 
-```{r,fig.width=10}
+```{r,fig.width=10, eval=FALSE}
 ggplot()+
   geom_sf(data=bal_city, fill='lightblue')+
   geom_sf(data=neighb)+
@@ -215,19 +233,31 @@ ggplot()+
   theme(legend.position="none")
 ```
 
+From these kernel density plots, we see that the incidence of violent crime is concentrated in the same geographical areas irrespective of the type of crime save for some minor distinctions. Most notably, incidents of aggravated assualt, homicide, and shootings are concentrated in the east and west portions of the inner city, while robbery is concentrated in the downtown area, where, unsurprisingly, there is the largest number of commerical properties in the city. Given these visualizations, it is indeed plausible that there is spatial dependence in the levels of violent crime in Baltimore City. However, a more rigorous investigation is needed to determine if such a dependence exists.
 
-### Developing Spatial Model
+### EDA and Preliminaries
+
+Prior to enumerating the CAR and SAR models, we first conduct exploratory data analysis so as to determine if the various aforementioned predictors are linearly related to the response variable: viol15 - the number of violent crimes in a given CSA per 1,000 residents. We note that this predictor is non-negative and continuous so a standard linear model for the mean structure is appropriate. The correlation between violent crime and the list of predictors selected a priori is given below:
 
 ```{r}
 #preliminary EDA
 kable(as.data.frame(-sort(-cor(sp_data[,-1])[,4])),col.names
 ="Correlation between Violent Crime and predictors")
+```
 
+
+We see that the number of businesses and the number of commercial properties have the strongest positive correlation with the level of violent crime liekly due to the relatively high incidence of robbery compared to other types of violent crime, while life expectancy has the strongest negative correlation with violent crime.
+
+To further investigate the relationship between the predictors and the response, we note that the residuals from a naive Bayesian linear model without transforming the predictors or the response are heteroskedastic and indicate the presence of a heavily influential point. This point corresponds to Downtown/Seton Hill, where again there is the largest number of incidents of violent crime, namely robbery, due to the disproportionate number of commercial properties and businesses in the area.
+
+```{r}
 ### no transformation
 sp.bas = bas.lm(viol15 ~ ., data=sp_data[,-1], prior="hyper-g-n",
                 modelprior=uniform(),a=3,method="deterministic")
 plot(sp.bas,which =1,main="viol15 ~ . No transformation")
 ```
+
+Thus, we suspect that a transformation of the response variable - perhaps a log transformation - is needed to account for the skewness of the response and to possibly stabilize the variance. Furthermore, we explore if transformations of the predictors are needed to ensure the assumption of normality is satisfied via Box-Cox transformations, the results of which are given below:
 
 ```{r}
 ## Box-Cox transformation ##
@@ -241,13 +271,18 @@ bc_data = bc_data %>%
 
 bc_trans <- car::powerTransform(bc_data[,-4])
 summary(bc_trans)
+```
 
+The results of the Box-Cox transformation indicates that the log transformation is indeed recommended, as indicated in the plot below:
+
+```{r}
 bc.lm <- lm(viol15~age18_15+log(age24_15)+log(hhpov15)+nilf15+log(unempr15)+
               sqrt(lesshs15)+log(comprop15)+log(numbus15)+sqrt(teenbir15)+log(tanf15)+log(lifexp15)+
               sqrt(mort1_15)+log(vacant15)+sqrt(hcvhouseXX), data=bc_data)
 MASS::boxcox(bc.lm)
 ```
 
+After incorporating the recommended transformations to both the response and predictors, we see that the relationships between the predictors and the response appear to be linear as shown by the following pairs plots:
 
 ```{r}
 #recommended transformations
@@ -265,6 +300,8 @@ GGally::ggpairs(lm_data[,c(4,7:10)])
 GGally::ggpairs(lm_data[,c(4,11:16)])
 ```
 
+Following the above transformations, we refine the model of the mean structure by performing Bayesian Variable selection via BMA using a mixture of g-priors. We select variables for which the posterior inclusion probability is above $0.5$, which are summarized in fourth plot, below:
+
 ```{r}
 #variable selection using BMA
 df.bas = bas.lm(lg_viol15 ~ ., data=lm_data[,-1], prior="hyper-g-n",
@@ -274,11 +311,14 @@ sp_resp = sp_sf %>% select(CSA2010,viol15)
 #diagnostics(df.bas, type="pip")
 par(mfrow=c(2,2))
 plot(df.bas)
-#plot(coef(df.bas),ask = FALSE)
 par(mfrow=c(1,1))
 bas_pred = lm_data[,c("CSA2010",names(lm_data %>% select(-c(lg_viol15,CSA2010)))[df.bas$probne0[-1]>=0.5])]
 bas_data = left_join(sp_resp,bas_pred,by="CSA2010")
+```
 
+Using this criterion, performing Bayesian variable selection suggests that the log of the number of commercial properties and the log of life expectancy in a CSA should be used in order to model the mean of the log of violent crime per 1,000 residents in said CSA. For completeness, we also performed variable selection via stepwise methods, more specifically with backward selection. Using BIC as the selection criterion resulted in the same choice of predictors as the Bayesian variable selection, while AIC predictably selected more predictors. The overall predictive performance, however, using these additional predictors: namely the log of the percent of the population aged 18-24, log of the number of businesses, log of the number of vacant properties and the square root of the number of teen pregnacies resulted in worse predictive performance when incorporated into the mean structure of the CAR and SAR models. We exclude explicitly enumerating these variables into the mean structure for each model and simply state the result in the interest of brevity.
+
+```{r}
 #variable selection using stepwise selection
 reg1 = lm(lg_viol15~.,data = lm_data[,-1])
 
@@ -291,15 +331,16 @@ bic_pred = lm_data[,c("CSA2010",names(bic_step$coefficients)[-1])]
 bic_data = left_join(sp_resp,bic_pred,by="CSA2010")
 ```
 
+The map displaying the log of violent crime rates in each CSA of Baltimore City in 2015 is displayed below; at a cursory glance there does appear to be some spatial dependence in the data as neighboring areas appear to share similar levels of the response variable.
+
 ```{r}
 ggplot()+
   geom_sf(data=bal_city, fill='grey')+
   geom_sf(data=bas_data,aes(fill=log(viol15)))+
-  #scale_fill_gradient(low="blue", high="red")+
   theme_bw()
 ```
 
-Map for manual readjustment of adjacency matrix: https://bniajfi.org/wp-content/uploads/2014/04/Zip-Codes-and-CSA-2010.pdf
+To formally test for the presence of spatial autocorrelation, we first construct an adjacency matrix. We note that while Baltimore city is a continguous shape, the function st_touches returns elements for which there are not adjacent neighborhoods, namely Harbor East and Hawkins Point. We reference the map of [Baltimore City's CSA's](https://bniajfi.org/wp-content/uploads/2014/04/Zip-Codes-and-CSA-2010.pdf) in order to fill in these elements manually making sure to satisfy the symmetry of the adjacency matrix when doing so. After doing so, we compute Moran's I for the log of violent crime rates in each CSA and conclude that there is statistically significant positive spatial autocorrelation present.
 
 ```{r, message=FALSE}
 ## adjacency matrix ##
@@ -317,9 +358,10 @@ W[bas_data$CSA2010 %in% ngh2,bas_data$CSA2010==csa[2]]=1
 listW = mat2listw(W)
 
 #spatial autoco.
-moran.test(bas_data$viol15, listW)
 moran.test(log(bas_data$viol15), listW)
 ```
+
+We further test if there is significant spatial structure in the data upon controlling for the relevant covariates implied by the Bayesian variable selection by checking if the residuals from the implied linear model sans any spatial random effect exhibit any significant autocorrelation. The summary of the naive linear model is given below:
 
 ```{r}
 #spatial autoco. partialing out covariates
@@ -331,7 +373,11 @@ bas_data = bas_data %>%
     lm_pred = l$fitted.values,
     lm_resid = l$residuals
   )
+```
 
+Upon taking the number of commerical properties and the life expectancy into account, we see that there is no longer any statistically significant spatial autocorrelation with regard to violent crime, as per the results of the Moran I test. Nonetheless, we proceed with developing CAR and SAR models to see if we can more accurately predict the level of violent crime in each CSA in 2015.
+
+```{r}
 p1 <- ggplot()+
   geom_sf(data=bal_city, fill='grey')+
   geom_sf(data=bas_data,aes(fill=lm_pred))+
@@ -349,26 +395,46 @@ grid.arrange(p1, p2, ncol=2)
 moran.test(bas_data$lm_resid, listW)
 ```
 
-### Areal Data Models
+
+### CAR and SAR models
+
+The model under consideration is given by:
+
+$$
+log(viol15_i) = \beta_1+\beta_2log(comprop15_i)+\beta_3log(lifexp15_i)+\omega_i + \epsilon_i
+$$
+
+where $\epsilon_i \overset{iid}{\sim} N(0,\sigma^2_w)$ and the spatial random effect $\omega {\sim}N(0,\Sigma_j)$ and the covariance matrix takes the usual forms:
+
+$$
+\begin{aligned}
+\Sigma_{CAR} &= \sigma^2(D-\phi W)^{-1}\\
+\\
+\Sigma_{SAR} & = (I-\phi D^{-1}W)^{-1}\sigma^2D^{-1}\left((I-\phi D^{-1}W)^{-1}\right)^T
+\end{aligned}
+$$
+
+for the CAR and SAR models, respectively. We first use the spdep library to fit each model and compare the results.
 
 ```{r}
 #CAR and SAR models
 bal_car = spautolm(formula = log(viol15) ~ lg_comprop15+lg_lifexp15, data = bas_data, 
                   listw = listW, family = "CAR")
-summary(bal_car)
 
 bal_sar = spautolm(formula = log(viol15) ~ lg_comprop15+lg_lifexp15, data = bas_data, 
                   listw = listW, family = "SAR")
-summary(bal_sar)
 
 bas_data = bas_data %>%
   mutate(car_pred = bal_car$fit$fitted.values, car_resid = bal_car$fit$residuals,
          sar_pred = bal_sar$fit$fitted.values, sar_resid = bal_sar$fit$residuals)
 ```
 
+The summary of the CAR model, the predictions and residuals for each CSA and the Moran's I test on the residuals are given below:
 
 ```{r}
 #car fit and residuals
+summary(bal_car)
+
 car_f <- ggplot()+
   geom_sf(data=bal_city, fill='grey')+
   geom_sf(data=bas_data, aes(fill=car_pred))+
@@ -381,10 +447,18 @@ car_r <- ggplot()+
   labs(title="CAR Model Residuals",fill="")+
   theme_bw()
 grid.arrange(car_f, car_r, ncol=2)
+
+moran.test(bas_data$car_resid, listW)
 ```
+
+The fitted value of $\hat{\phi} \approx -0.048132$ along with the corresponding likelihood ratio test suggests that there is no significant spatial autocorrelation present, a conclusion buttressed by the Moran's I test. This is as expected considering the previous result that there is no remaining spatial structure in the incidence in violent crime upon controlling for the relevant covariates contained in the mean structure of the model.
+
+The SAR model yields analogous results, with slightly different coefficient estimates and therefore predictions as well.
 
 ```{r}
 #sar fit and residuals
+summary(bal_sar)
+
 sar_f <- ggplot()+
   geom_sf(data=bal_city, fill='grey')+
   geom_sf(data=bas_data, aes(fill=sar_pred))+
@@ -397,22 +471,25 @@ sar_r <- ggplot()+
   labs(title="SAR Model Predictions",fill="")+
   theme_bw()
 grid.arrange(sar_f, sar_r, ncol=2)
-```
 
-```{r}
-#comparing residuals - considering removing this?
-par(mfrow=c(1,2))
-plot(bas_data$car_resid, bas_data$sar_resid, main="CAR vs SAR Residuals",xlab="",ylab="")
-abline(a = 0, b=1)
-qqnorm(bas_data$car_resid, main = "CAR Residuals");qqline(bas_data$car_resid)
-#qqnorm(bas_data$sar_resid, main = "SAR Residuals");qqline(bas_data$sar_resid)
-par(mfrow=c(1,1))
-
-moran.test(bas_data$car_resid, listW)
 moran.test(bas_data$sar_resid, listW)
 ```
 
-### Bayesian Versions of the model
+The following plots show the similarity in the residuals - and therefore the predictions - given by each model, and that the assumption regarding the normality of the errors for each model is justifiable save for the outlier of South Baltimore, for which both models overestimate the aggregate level of violent crime in 2015.
+
+```{r}
+#comparing residuals
+par(mfrow=c(1,3))
+plot(bas_data$car_resid, bas_data$sar_resid, main="CAR vs SAR Residuals",xlab="",ylab="")
+abline(a = 0, b=1)
+qqnorm(bas_data$car_resid, main = "CAR Residuals");qqline(bas_data$car_resid)
+qqnorm(bas_data$sar_resid, main = "SAR Residuals");qqline(bas_data$sar_resid)
+par(mfrow=c(1,1))
+```
+
+### Bayesian CAR/SAR models
+
+We also fit Bayesian models to see if there is any appreciable improvement in predictive accuracy over the frequentist versions fitted above. For both the Bayesian CAR and SAR models, we use uniformative normal priors for the regression coefficients: $\beta_i \overset{iid}{\sim}N(0,100^2)$, gamma priors for the precisions $\frac{1}{\sigma^2},\frac{1}{\sigma^2_w} \overset{iid}{\sim} Gamma(1,1)$ and a uniform prior on $\phi \sim U[0,1)$ where the support is such that the value of $\phi$ will be restricted to be less than one so that the covariance matrices are invertible. We run the chains for 50,000 iterations, thinning every 50 observations.
 
 ```{r}
 #Bayesian CAR model
@@ -437,7 +514,7 @@ car_model = "model{
 
   omega ~ dmnorm(rep(0,length(y)), tau * (D - phi*W))
   sigma2 = 1/tau
-  tau ~ dgamma(2, 2)
+  tau ~ dgamma(1, 1)
   phi ~ dunif(0,0.99)
 }"
 ```
@@ -477,6 +554,8 @@ omega = tidybayes::gather_samples(car_coda,omega[i])
 y_pred = tidybayes::gather_samples(car_coda,y_pred[i])
 ```
 
+The chains and posterior summaries for each of the parameters for the CAR model are given below:
+
 ```{r}
 ggplot(beta_params, aes(x=.iteration, y=estimate, color=term)) +
   geom_line() +
@@ -489,11 +568,29 @@ ggplot(ar_params, aes(x=.iteration, y=estimate, color=term)) +
   guides(color=FALSE)
 ```
 
+We see that despite thinning, there is significant autocorrelation in the chains for the coefficients $\beta_1$ and $\beta_3$; the remaining chains appear to have explored the parameter space sufficiently well to conclude that they appear to have converged. The posterior summaries for each of the model parameters are given below:
+
+```{r}
+#summary of posterior draws
+post = bind_rows(beta_params, ar_params) %>%
+  group_by(term) %>%
+  summarize(
+    post_mean = mean(estimate),
+    post_med  = median(estimate),
+    post_lower = quantile(estimate, probs = 0.025),
+    post_upper = quantile(estimate, probs = 0.975)
+  )
+
+knitr::kable(post, digits = 3, caption = "Bayesian CAR model")
+```
+
+The posterior means for the coefficient estimates for the mean structure are markedly similar to the estimates from the previously fitted frequentist CAR model. The posterior mean for $\phi \approx 0.362$ is markedly higher than the estimate produced by the previous CAR model indicating that the Bayesian model shares more information across observations than the frequentist model. As to be expected the residuals from the model display no evidence of significant spatial autocorrelation, as indicated by the Moran's I test.
+
 ```{r}
 bas_data = bas_data %>% 
   mutate(
     bayes_car_pred = y_pred %>% summarize(pred = mean(estimate)) %>% pull(pred), 
-    bayes_car_resid = log(viol15) - car_pred
+    bayes_car_resid = log(viol15) - bayes_car_pred
   )
 
 car_f <- ggplot()+
@@ -512,3 +609,135 @@ moran.test(bas_data$bayes_car_resid, listW)
 ```
 
 
+```{r}
+#Bayesian SAR model
+D = diag(rowSums(W))
+D_inv = diag(1/diag(D))
+X = model.matrix(l)
+y = log(bas_data$viol15)
+#I = diag(length(y))
+W_tilde = D_inv %*% W
+
+sar_model = "model{
+  for(i in 1:length(y)) {
+    y[i] ~ dnorm(mu[i],tauw)
+    y_pred[i] ~ dnorm(mu[i],tauw)
+    mu[i] = X[i,] %*% beta + omega[i]
+  }
+  #priors for beta
+  for(i in 1:3) {
+    beta[i] ~ dnorm(0,0.0001)
+  }
+
+  #priors for sigma2_w
+  tauw ~ dgamma(1,1)
+  sigma2w = 1/tauw
+  
+  C = I - phi*W_tilde
+  omega ~ dmnorm(rep(0,length(y)), tau * t(C) %*% D %*% C)
+  sigma2 = 1/tau
+  tau ~ dgamma(1, 1)
+  phi ~ dunif(0,0.99)
+}"
+```
+
+
+```{r}
+if (!file.exists("sar_model.Rdata")) {
+  m = rjags::jags.model(
+    textConnection(sar_model), 
+    data = list(
+      D = D,
+      y = y,
+      I = diag(length(y)),
+      X = X,
+      W_tilde = W_tilde
+    ),
+    n.adapt=25000
+  )
+
+  update(m, n.iter=25000)
+  
+  sar_coda = rjags::coda.samples(
+    m, variable.names=c("sigma2","tau", "beta", "omega", "phi", "y_pred","sigma2w","tauw"),
+    n.iter=50000, thin=50
+  )
+  save(sar_coda, m, file="sar_model.Rdata")
+} else {
+  load("sar_model.Rdata")
+}
+
+beta_params = tidybayes::gather_samples(sar_coda,beta[i]) %>%
+  ungroup() %>%
+  mutate(term = paste0(term,"[",i,"]"))
+
+ar_params = tidybayes::gather_samples(sar_coda,sigma2,phi,sigma2w)
+
+omega = tidybayes::gather_samples(sar_coda,omega[i])
+y_pred = tidybayes::gather_samples(sar_coda,y_pred[i])
+```
+
+The chains from the SAR model, given below, display the same results as that of the CAR model; the chains for $\beta_1$ and $\beta_3$ suffer from significant autocorrelation despite thinning while the chains for the remaining coefficients have explored the parameter space well and appear to have converged.
+
+```{r}
+ggplot(beta_params, aes(x=.iteration, y=estimate, color=term)) +
+  geom_line() +
+  facet_grid(term~., scales="free_y") +
+  guides(color=FALSE)
+
+ggplot(ar_params, aes(x=.iteration, y=estimate, color=term)) +
+  geom_line() +
+  facet_grid(term~., scales="free_y") +
+  guides(color=FALSE)
+```
+
+The posterior summaries for the parameters of the SAR model show similar behavior as those of the CAR model:
+
+```{r}
+#summary of posterior draws
+post = bind_rows(beta_params, ar_params) %>%
+  group_by(term) %>%
+  summarize(
+    post_mean = mean(estimate),
+    post_med  = median(estimate),
+    post_lower = quantile(estimate, probs = 0.025),
+    post_upper = quantile(estimate, probs = 0.975)
+  )
+
+knitr::kable(post, digits = 3, caption = "Bayesian SAR Model")
+```
+
+The coefficients of the mean structure are similar to those from the frequentist SAR model while the estimate of $\phi$ is significantly higher indicating the Bayesian model, again, permits more sharing of information across observations. Again, the model residuals display no evidence of significant spatial autocorrelation unaccounted for by the model.
+
+```{r}
+bas_data = bas_data %>% 
+  mutate(
+    bayes_sar_pred = y_pred %>% summarize(pred = mean(estimate)) %>% pull(pred), 
+    bayes_sar_resid = log(viol15) - bayes_sar_pred
+  )
+
+sar_f <- ggplot()+
+  geom_sf(data=bal_city, fill='grey')+
+  geom_sf(data=bas_data, aes(fill=bayes_sar_pred))+
+  labs(title="Bayes SAR Model Predictions",fill="")+
+  theme_bw()
+
+sar_r <- ggplot()+
+  geom_sf(data=bal_city, fill='grey')+
+  geom_sf(data=bas_data, aes(fill=bayes_sar_resid))+
+  labs(title="Bayes SAR Model Residuals",fill="")+
+  theme_bw()
+grid.arrange(sar_f, sar_r, ncol=2)
+moran.test(bas_data$bayes_sar_resid, listW)
+```
+
+Regarding predictive performance of each of the models, the areal data models have a lower RMSE than the simple linear model, with the Bayesian models showing an appreciable improvement over said model as well as the frequentist areal models. This is likely due to the higher estimate of $\phi$ allowing for more sharing of information across observations and thus improving predictive performance. As an aside, we note that the CAR model, both in the Bayesian and frequentist setting, marginally outperforms the SAR model.
+
+```{r}
+rmse_data = bas_data %>%
+  select(bayes_car = bayes_car_resid,bayes_sar = bayes_sar_resid,
+         car = car_resid,sar = sar_resid,lm = lm_resid)
+st_geometry(rmse_data) <- NULL
+rmse = function(x){sqrt(mean(x^2))}
+kable(sort(apply(rmse_data,2,rmse)),col.names="RMSE")
+```
